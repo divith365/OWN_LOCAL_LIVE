@@ -1,0 +1,1289 @@
+# OWNLOCAL LIVE – Production Implementation Brief
+
+## 1. Goal
+
+Build OWNLOCAL LIVE as a production-ready local marketplace for:
+
+- Customers
+- Merchants
+- Delivery Partners
+- Admin
+
+The product should support local discovery, ordering, delivery assignment, live tracking, payment handling, merchant inventory, rider operations, and admin controls.
+
+Initial launch target: Ilkal.
+
+The product should later scale to additional towns/cities without redesigning the core architecture.
+
+---
+
+# 2. Frontend Technology
+
+Use:
+
+- React Native
+- Expo
+- TypeScript
+- Expo Router
+- React Query / TanStack Query
+- Zustand or lightweight state management
+- React Hook Form
+- Zod validation
+
+Primary targets:
+
+- Android
+- iOS
+
+Admin dashboard:
+
+- React web app
+- Can later use Next.js or Vite React
+
+Recommended repo structure:
+
+```text
+OWN_LOCAL_LIVE/
+
+apps/
+  mobile/
+  admin/
+
+packages/
+  ui/
+  types/
+  api-client/
+  validation/
+  utils/
+
+backend/
+  workers/
+  migrations/
+
+docs/
+```
+
+---
+
+# 3. Mobile App Structure
+
+Recommended mobile app structure:
+
+```text
+apps/mobile/
+
+app/
+  (auth)/
+    login.tsx
+    otp.tsx
+    register.tsx
+
+  (customer)/
+    home.tsx
+    search.tsx
+    merchant/[id].tsx
+    cart.tsx
+    checkout.tsx
+    orders.tsx
+    order/[id].tsx
+    profile.tsx
+    addresses.tsx
+
+  (merchant)/
+    dashboard.tsx
+    orders.tsx
+    order/[id].tsx
+    products.tsx
+    product/[id].tsx
+    inventory.tsx
+    delivery-settings.tsx
+    profile.tsx
+
+  (rider)/
+    dashboard.tsx
+    available-orders.tsx
+    active-delivery.tsx
+    earnings.tsx
+    profile.tsx
+
+components/
+services/
+hooks/
+store/
+types/
+constants/
+assets/
+```
+
+---
+
+# 4. User Roles
+
+## Customer
+
+Customer should be able to:
+
+- Register/login
+- Allow location access
+- Select delivery location
+- Discover nearby merchants
+- Search products
+- Browse merchant catalogue/menu
+- Add products to cart
+- Select merchant delivery / partner delivery / pickup
+- Place order
+- Pay online or COD where supported
+- Track order
+- Track rider
+- Receive notifications
+- View order history
+- Raise support/refund request
+
+---
+
+## Merchant
+
+Merchant should be able to:
+
+- Register business
+- Upload documents
+- Wait for admin approval
+- Login securely
+- Add/edit products
+- Add product images
+- Change price
+- Change stock
+- Enable/disable product
+- Set store timings
+- Set store location
+- Set delivery radius
+- Enable own delivery
+- Accept/reject orders
+- Confirm availability
+- Mark preparing
+- Mark ready
+- Hand over to rider
+- View completed orders
+- View settlement/payment information
+
+Merchant confirmation is part of the intended OWNLOCAL LIVE order flow.
+
+---
+
+## Delivery Partner
+
+Rider should be able to:
+
+- Register
+- Upload ID/license/vehicle details
+- Wait for admin approval
+- Login
+- Go online/offline
+- Share GPS while active
+- See nearby delivery jobs
+- Accept/decline job
+- See pickup merchant
+- Navigate to merchant
+- Confirm pickup
+- Navigate to customer
+- Complete delivery using OTP
+- View earnings
+- View delivery history
+
+Do not expose unrestricted customer address/contact information before rider assignment.
+
+---
+
+## Admin
+
+Admin should be web-first.
+
+Admin should handle:
+
+- Merchant approvals
+- Rider approvals
+- Customer support
+- Orders
+- Refunds
+- Payment reconciliation
+- Merchant documents
+- Rider documents
+- Complaints
+- Block/unblock accounts
+- Audit logs
+- Suspicious activity
+- Reports
+- Configuration
+
+The source project explicitly calls for role-limited access and protection of identity documents, phone numbers, bank details and customer addresses.
+
+---
+
+# 5. Backend Architecture
+
+Use Cloudflare.
+
+Core components:
+
+```text
+React Native App
+       |
+       v
+Cloudflare Workers API
+       |
+       +------ D1
+       |
+       +------ R2
+       |
+       +------ Durable Objects
+       |
+       +------ Queues
+```
+
+Use:
+
+- Cloudflare Workers → API/business logic
+- Cloudflare D1 → relational database
+- Cloudflare R2 → images/documents
+- Durable Objects → real-time order/rider state
+- WebSockets → live rider tracking
+- Cloudflare Queues → notifications/webhooks/background jobs
+
+Never expose D1/R2 directly to the mobile app.
+
+All access must go through Workers.
+
+---
+
+# 6. Database Design
+
+Recommended D1 tables:
+
+```text
+users
+user_sessions
+customer_profiles
+merchant_profiles
+merchant_documents
+rider_profiles
+rider_documents
+addresses
+
+categories
+products
+product_images
+merchant_products
+inventory
+
+carts
+cart_items
+
+orders
+order_items
+order_status_history
+order_delivery
+order_payments
+
+rider_locations
+delivery_assignments
+
+payment_transactions
+refunds
+
+notifications
+support_tickets
+reviews
+
+admin_users
+audit_logs
+```
+
+---
+
+# 7. Core User Table
+
+Example:
+
+```sql
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  phone TEXT UNIQUE,
+  email TEXT,
+  role TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+```
+
+Roles:
+
+```text
+customer
+merchant
+rider
+admin
+```
+
+Do not store plain passwords.
+
+---
+
+# 8. Merchant Table
+
+```sql
+CREATE TABLE merchant_profiles (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  business_name TEXT NOT NULL,
+  category TEXT,
+  latitude REAL,
+  longitude REAL,
+  address TEXT,
+  service_radius_km REAL DEFAULT 5,
+  own_delivery_enabled INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'pending',
+  created_at TEXT NOT NULL
+);
+```
+
+---
+
+# 9. Rider Table
+
+```sql
+CREATE TABLE rider_profiles (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  vehicle_type TEXT,
+  vehicle_number TEXT,
+  status TEXT DEFAULT 'pending',
+  online_status INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+```
+
+---
+
+# 10. Product Table
+
+```sql
+CREATE TABLE products (
+  id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  price REAL NOT NULL,
+  category_id TEXT,
+  image_key TEXT,
+  active INTEGER DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+```
+
+---
+
+# 11. Orders
+
+Recommended order state machine:
+
+```text
+CREATED
+
+MERCHANT_CONFIRMATION_PENDING
+
+MERCHANT_CONFIRMED
+
+RIDER_ASSIGNMENT_PENDING
+
+RIDER_ASSIGNED
+
+PAYMENT_PENDING
+
+PAYMENT_CONFIRMED
+
+PREPARING
+
+READY_FOR_PICKUP
+
+PICKED_UP
+
+OUT_FOR_DELIVERY
+
+DELIVERED
+```
+
+Exceptional states:
+
+```text
+MERCHANT_REJECTED
+CUSTOMER_CANCELLED
+RIDER_CANCELLED
+PAYMENT_FAILED
+REFUND_PENDING
+REFUNDED
+FAILED
+```
+
+Do not allow arbitrary status transitions.
+
+Create a backend state machine validating every transition.
+
+---
+
+# 12. Location Architecture
+
+Use native phone GPS.
+
+Customer:
+
+```text
+Expo Location
+→ latitude
+→ longitude
+```
+
+Rider:
+
+```text
+Expo Location
+→ foreground tracking
+→ background tracking while active
+```
+
+Merchant location should be registered and stored.
+
+Store:
+
+```text
+latitude
+longitude
+```
+
+for all merchants.
+
+---
+
+# 13. Nearby Merchant Algorithm
+
+Do not require Google Maps for basic nearby discovery.
+
+Use Haversine distance.
+
+Pseudo-code:
+
+```ts
+distanceKm(
+  customerLat,
+  customerLng,
+  merchantLat,
+  merchantLng
+)
+```
+
+Return merchants where:
+
+```text
+distance <= merchant.service_radius_km
+```
+
+Sort ascending by distance.
+
+Example:
+
+```text
+Ayodhya Hotel        0.7 km
+Ilkal Saree House    1.2 km
+Fresh Mart           1.8 km
+```
+
+---
+
+# 14. Nearby Rider Algorithm
+
+Only consider riders where:
+
+```text
+approved = true
+online = true
+location_updated_recently = true
+```
+
+Calculate distance from pickup merchant.
+
+Example:
+
+```text
+find riders within 3 km
+```
+
+Sort nearest first.
+
+Later improve assignment using:
+
+- Distance
+- Rider workload
+- Acceptance rate
+- Current active order
+- Vehicle type
+- Estimated pickup time
+
+---
+
+# 15. Rider Location Updates
+
+Do not store every GPS update permanently in D1.
+
+Recommended:
+
+```text
+Rider mobile app
+      |
+      v
+Cloudflare Worker
+      |
+      v
+Durable Object
+```
+
+Use WebSocket for active delivery.
+
+Example update interval:
+
+```text
+5–15 seconds while actively delivering
+```
+
+Use slower interval while online but idle.
+
+Persist occasional snapshots if required for:
+
+- disputes
+- audit
+- delivery analytics
+
+---
+
+# 16. Maps
+
+Production recommendation:
+
+Google Maps SDK.
+
+Use map primarily for:
+
+- merchant location
+- customer delivery location
+- rider position
+- delivery map
+
+Do not calculate every distance through Google.
+
+Use your own geographic calculation for nearby filtering.
+
+---
+
+# 17. Google APIs
+
+Use only where necessary.
+
+## Maps SDK
+
+For:
+
+- map display
+
+## Places API
+
+For:
+
+- address autocomplete
+- landmark search
+- locality search
+
+## Routes API
+
+For:
+
+- actual road distance
+- ETA
+- delivery route
+
+Example:
+
+```text
+Straight-line distance:
+1.2 km
+
+Google route:
+1.8 km / 7 minutes
+```
+
+Do not call Routes API continuously during discovery.
+
+Call it mainly once a rider is assigned or during checkout when accurate delivery estimates are required.
+
+---
+
+# 18. Authentication
+
+Do not create insecure custom authentication.
+
+Requirements:
+
+- OTP/customer login
+- merchant login
+- rider login
+- admin MFA
+- refresh tokens
+- device/session management
+- logout all devices
+- token expiry
+- account blocking
+
+Cloudflare Workers should validate every authenticated request.
+
+JWT/session validation should happen server-side.
+
+---
+
+# 19. R2 Storage
+
+Use R2 for:
+
+```text
+product-images/
+merchant-documents/
+rider-documents/
+profile-images/
+invoices/
+support-attachments/
+```
+
+Never make identity documents publicly accessible.
+
+Use Worker-controlled signed/temporary access URLs.
+
+---
+
+# 20. Payments
+
+Recommended flow:
+
+```text
+Customer
+   |
+   v
+Create Order
+   |
+   v
+Worker creates Payment Order
+   |
+   v
+Payment Gateway
+   |
+   v
+Customer Pays
+   |
+   v
+Gateway Webhook
+   |
+   v
+Cloudflare Worker
+   |
+   v
+Verify Signature
+   |
+   v
+Update D1 Payment + Order
+```
+
+Never trust:
+
+```text
+mobile app → paymentSuccess=true
+```
+
+Payment gateway webhook must be the source of truth.
+
+---
+
+# 21. Push Notifications
+
+Needed events:
+
+Customer:
+
+```text
+Order accepted
+Order rejected
+Rider assigned
+Order picked up
+Rider nearby
+Order delivered
+Refund status
+```
+
+Merchant:
+
+```text
+New order
+Order cancelled
+Rider arrived
+Payment confirmed
+```
+
+Rider:
+
+```text
+New delivery request
+Assignment cancelled
+Pickup ready
+```
+
+Use:
+
+- FCM Android
+- APNs iOS
+
+Expo notifications can simplify implementation.
+
+---
+
+# 22. Offline / Poor Network Handling
+
+Important for smaller towns.
+
+Implement:
+
+- request retries
+- cached merchant/product listings
+- local cart persistence
+- pending action queue
+- connectivity detection
+- clear offline status
+
+Never silently duplicate orders.
+
+Every order creation must use an idempotency key.
+
+Example:
+
+```text
+X-Idempotency-Key:
+uuid
+```
+
+---
+
+# 23. API Design
+
+Base:
+
+```text
+/api/v1/
+```
+
+Examples:
+
+```text
+POST /auth/request-otp
+POST /auth/verify-otp
+
+GET /merchants/nearby
+GET /merchants/:id
+GET /merchants/:id/products
+
+POST /cart
+POST /orders
+GET /orders/:id
+
+POST /merchant/orders/:id/accept
+POST /merchant/orders/:id/reject
+
+GET /rider/jobs
+POST /rider/jobs/:id/accept
+
+POST /rider/location
+
+POST /payments/create
+POST /payments/webhook
+```
+
+---
+
+# 24. Security
+
+Mandatory:
+
+- HTTPS only
+- authentication on protected APIs
+- server-side authorization
+- role-based access control
+- request validation
+- rate limiting
+- secure secret storage
+- encrypted external credentials
+- audit logging
+- document access controls
+- payment webhook verification
+- OTP rate limiting
+
+Never trust:
+
+```text
+role supplied by frontend
+price supplied by frontend
+merchant ownership supplied by frontend
+payment status supplied by frontend
+delivery status supplied without authorization
+```
+
+All prices and totals must be recalculated server-side.
+
+---
+
+# 25. Customer App Navigation
+
+Bottom navigation:
+
+```text
+Home
+Search
+Orders
+Profile
+```
+
+Home:
+
+```text
+Location
+Search
+Categories
+Nearby merchants
+Popular products
+Offers
+```
+
+Merchant screen:
+
+```text
+Merchant Name
+Rating
+Distance
+Delivery availability
+Categories
+Products
+Add to Cart
+```
+
+---
+
+# 26. Merchant App Navigation
+
+```text
+Dashboard
+Orders
+Products
+Inventory
+Profile
+```
+
+Dashboard metrics:
+
+```text
+Today's orders
+Pending
+Preparing
+Completed
+Revenue
+```
+
+---
+
+# 27. Rider App Navigation
+
+```text
+Home
+Jobs
+Active Delivery
+Earnings
+Profile
+```
+
+Main screen:
+
+```text
+ONLINE / OFFLINE
+
+Available deliveries
+
+Pickup:
+Ayodhya Hotel
+
+Distance:
+0.8 km
+
+Delivery:
+1.7 km
+
+Estimated earning:
+₹XX
+
+ACCEPT
+```
+
+---
+
+# 28. Admin Dashboard
+
+Use React web.
+
+Sections:
+
+```text
+Dashboard
+Customers
+Merchants
+Riders
+Orders
+Payments
+Refunds
+Support
+Approvals
+Reports
+Audit Logs
+Settings
+```
+
+Admin permissions should later support:
+
+```text
+super_admin
+operations
+support
+finance
+verification
+```
+
+---
+
+# 29. Ilkal Seed Data
+
+During development create realistic seed data.
+
+Merchants:
+
+```text
+Ayodhya Hotel
+Ilkal Heritage Sarees
+Basaveshwar Kirana Store
+Fresh Basket Ilkal
+City Medical & General Store
+```
+
+Example Ayodhya Hotel products:
+
+```text
+Puri Plate
+Masala Dosa
+Idli-Vada Plate
+Coffee
+Cold Drink
+Meals
+Tea
+```
+
+The original project uses an illustrative Ayodhya Hotel basket and merchant-confirmation flow.
+
+---
+
+# 30. Environment Configuration
+
+Never hard-code environment values.
+
+Use:
+
+```text
+.env.development
+.env.production
+```
+
+Examples:
+
+```text
+API_BASE_URL
+GOOGLE_MAPS_API_KEY
+PAYMENT_GATEWAY_KEY
+AUTH_PUBLIC_KEY
+```
+
+Backend secrets must live in Cloudflare Worker secrets, never inside the mobile bundle.
+
+---
+
+# 31. Cloudflare Environments
+
+Create separate environments:
+
+```text
+DEV
+STAGING
+PRODUCTION
+```
+
+Separate:
+
+```text
+D1 databases
+R2 buckets
+Worker environments
+API secrets
+```
+
+Never test production payments/order changes using development credentials.
+
+---
+
+# 32. Git Strategy
+
+Branches:
+
+```text
+main
+develop
+feature/*
+fix/*
+```
+
+Example:
+
+```text
+feature/customer-home
+feature/merchant-orders
+feature/rider-location
+feature/payment
+```
+
+Use Pull Requests.
+
+---
+
+# 33. Testing
+
+Add:
+
+Unit:
+
+```text
+Vitest/Jest
+```
+
+React Native:
+
+```text
+React Native Testing Library
+```
+
+API:
+
+```text
+Worker integration tests
+```
+
+End-to-end:
+
+```text
+Maestro
+```
+
+Important test scenarios:
+
+```text
+Customer creates order
+Merchant accepts
+Rider accepts
+Payment succeeds
+Pickup occurs
+OTP delivery succeeds
+Order completes
+```
+
+Also test:
+
+```text
+Merchant rejection
+Rider rejection
+Payment failure
+Network failure
+Duplicate payment callback
+Duplicate order submission
+Cancellation
+Refund
+```
+
+---
+
+# 34. Build / Release
+
+During development:
+
+```bash
+npx expo start
+```
+
+Android development:
+
+```bash
+npx expo run:android
+```
+
+Production builds:
+
+```text
+EAS Build
+```
+
+Outputs:
+
+```text
+APK → testing
+AAB → Google Play
+IPA → iOS/TestFlight/App Store
+```
+
+Android Studio is useful for native debugging/emulators but should not be the primary code editor.
+
+---
+
+# 35. Development Order
+
+Implement in this order:
+
+## Phase 1 – Foundation
+
+- monorepo
+- Expo app
+- navigation
+- shared design system
+- environment configuration
+- Cloudflare Worker
+- D1
+- migrations
+
+## Phase 2 – Authentication
+
+- login
+- OTP
+- sessions
+- roles
+- RBAC
+
+## Phase 3 – Customer Marketplace
+
+- location
+- nearby merchants
+- merchant page
+- product listing
+- cart
+
+## Phase 4 – Ordering
+
+- checkout
+- delivery type
+- create order
+- merchant confirmation
+- order state machine
+
+## Phase 5 – Merchant
+
+- merchant dashboard
+- orders
+- products
+- inventory
+
+## Phase 6 – Rider
+
+- registration
+- online/offline
+- GPS
+- job matching
+- pickup
+- delivery OTP
+
+## Phase 7 – Realtime
+
+- Durable Objects
+- WebSockets
+- live rider position
+- order tracking
+
+## Phase 8 – Payments
+
+- gateway
+- webhook
+- reconciliation
+- refunds
+
+## Phase 9 – Notifications
+
+- Android/iOS push
+- transactional notifications
+
+## Phase 10 – Admin
+
+- approvals
+- order operations
+- payment/refund monitoring
+- support
+- audit
+
+---
+
+# 36. Important Product Rule
+
+Treat this as production software.
+
+Do not implement shortcuts such as:
+
+```text
+fake payment success
+plain passwords
+public KYC documents
+client-side authorization
+hard-coded API keys
+direct database calls from the mobile application
+unvalidated status updates
+```
+
+The original project explicitly identifies verified merchants/riders, legitimate payment integration, accurate order state, support/refunds and data security as minimum gates before launch.
+
+---
+
+# 37. Codex First Task
+
+Start by creating the production repository structure and foundation.
+
+Do not implement the entire system in one giant change.
+
+First:
+
+1. Create React Native Expo TypeScript app.
+2. Configure Expo Router.
+3. Create shared design system using OWNLOCAL LIVE branding.
+4. Create Customer/Merchant/Rider role navigation.
+5. Add development seed data.
+6. Create Cloudflare Worker project.
+7. Configure D1.
+8. Create initial migrations.
+9. Create typed API client.
+10. Add README explaining local setup.
+11. Ensure Android can run successfully.
+12. Commit the foundation before implementing real features.
+
+Use clean TypeScript, reusable components and production-quality folder organization.
+
+Do not introduce Supabase.
+
+Backend must use Cloudflare Workers + D1 + R2 architecture.
